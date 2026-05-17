@@ -19,6 +19,7 @@ from pathlib import Path
 from threading import Lock
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -35,6 +36,15 @@ ALLOWED_AUTO_LANGS = set(
     s.strip().lower() for s in os.environ.get("ALLOWED_AUTO_LANGS", "es,ca").split(",") if s.strip()
 )
 DEFAULT_FALLBACK_LANG = os.environ.get("DEFAULT_FALLBACK_LANG", "es")
+
+# CORS — allow the GitHub Pages frontend to talk to the local server.
+# Add more origins via env: ALLOWED_ORIGINS="https://foo.com,https://bar.com"
+ALLOWED_ORIGINS = [
+    s.strip() for s in os.environ.get(
+        "ALLOWED_ORIGINS",
+        "http://localhost:8000,http://127.0.0.1:8000,https://josecl.github.io",
+    ).split(",") if s.strip()
+]
 
 ROOT = Path(__file__).parent
 WEB_DIR = ROOT / "web"
@@ -91,6 +101,14 @@ def _load_model():
 
 # -------- app --------
 app = FastAPI(title="Voice-to-Text · Night City")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=86400,
+)
 
 
 @app.get("/")

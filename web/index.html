@@ -334,10 +334,21 @@
       <span id="status-ffmpeg">FFMPEG: <b>--</b></span>
     </div>
     <div class="right">
+      <button class="mini" id="backend-btn" style="border-color:var(--cyan);color:var(--cyan)" title="Configurar URL del backend">[ BACKEND ]</button>
       <button class="mini" id="history-btn" style="border-color:var(--cyan);color:var(--cyan)">[ HISTORY ]</button>
       <button class="mini" id="warm" style="border-color:var(--yellow);color:var(--yellow)">[ WARM UP ]</button>
       <span>v.2077.05.17</span>
     </div>
+  </div>
+
+  <!-- Banner cuando se sirve desde GitHub Pages (no localhost) -->
+  <div id="remote-banner" style="display:none;margin-top:12px;padding:14px 16px;border:1px solid var(--red);background:rgba(255,0,60,.06);font-family:'Share Tech Mono',monospace;font-size:12px;color:#ffb3c2;letter-spacing:.08em;line-height:1.6">
+    <b style="color:var(--red)">// REMOTE FRONTEND DETECTED.</b>
+    Esta página solo es la UI. Necesitas el server local corriendo en tu equipo.<br>
+    1. Clona <a href="https://github.com/josecl/voice-to-text-cyberpunk" target="_blank" style="color:var(--cyan)">josecl/voice-to-text-cyberpunk</a> ·
+    2. <code style="color:var(--yellow)">python server.py</code> ·
+    3. La UI hará fetch a <code id="banner-backend" style="color:var(--cyan)">http://localhost:8000</code>
+    <span id="banner-status" style="margin-left:8px"></span>
   </div>
 
   <!-- Download progress (sólo visible mientras descarga/carga) -->
@@ -445,6 +456,23 @@
 </aside>
 
 <script>
+/* =================== BACKEND BASE URL =================== */
+const API_KEY = 'vtt-backend';
+const LOCAL_HOSTS = ['localhost','127.0.0.1','0.0.0.0',''];
+function isLocalHost(){ return LOCAL_HOSTS.includes(location.hostname); }
+function getApiBase(){
+  // ?backend=... in URL overrides and persists
+  const fromQuery = new URLSearchParams(location.search).get('backend');
+  if(fromQuery){
+    localStorage.setItem(API_KEY, fromQuery.replace(/\/+$/,''));
+    history.replaceState(null, '', location.pathname);
+  }
+  if(isLocalHost()) return ''; // same-origin
+  return (localStorage.getItem(API_KEY) || 'http://localhost:8000').replace(/\/+$/,'');
+}
+let API_BASE = getApiBase();
+function apiUrl(p){ return API_BASE + p; }
+
 const $ = (sel)=>document.querySelector(sel);
 const els = {
   file: $('#file'), drop: $('#drop'), chip: $('#chip'), chipName: $('#chip-name'),
@@ -464,7 +492,7 @@ let state = { file: null, lang: 'auto', model: null, lastResult: null };
 // HUD status
 async function refreshStatus(){
   try{
-    const r = await fetch('/api/status'); const j = await r.json();
+    const r = await fetch(apiUrl('/api/status')); const j = await r.json();
     state.model = j.model;
     let engineColor = 'var(--red)', engineLabel = 'IDLE';
     if(j.error){ engineColor='var(--red)'; engineLabel='ERROR'; }
@@ -478,6 +506,42 @@ async function refreshStatus(){
 }
 refreshStatus(); setInterval(refreshStatus, 3000);
 
+// Backend config button
+document.getElementById('backend-btn').addEventListener('click', ()=>{
+  const cur = localStorage.getItem(API_KEY) || (isLocalHost() ? location.origin : 'http://localhost:8000');
+  const next = prompt('URL del backend (server local):', cur);
+  if(next !== null){
+    const trimmed = next.trim().replace(/\/+$/,'');
+    if(trimmed){ localStorage.setItem(API_KEY, trimmed); }
+    else { localStorage.removeItem(API_KEY); }
+    API_BASE = getApiBase();
+    const bb = document.getElementById('banner-backend');
+    if(bb) bb.textContent = API_BASE || location.origin;
+    refreshStatus();
+  }
+});
+
+// Remote banner + live backend probe (only when served outside localhost)
+if(!isLocalHost()){
+  const banner = document.getElementById('remote-banner');
+  const bannerBackend = document.getElementById('banner-backend');
+  const bannerStatus = document.getElementById('banner-status');
+  banner.style.display = 'block';
+  bannerBackend.textContent = API_BASE;
+  async function probe(){
+    try{
+      const r = await fetch(apiUrl('/api/status'), { cache:'no-store' });
+      if(!r.ok) throw new Error();
+      bannerStatus.innerHTML = '<b style="color:var(--green)">[ ONLINE ]</b>';
+      banner.style.borderColor = 'var(--green)'; banner.style.background = 'rgba(0,255,159,.05)';
+    }catch(e){
+      bannerStatus.innerHTML = '<b style="color:var(--red)">[ UNREACHABLE ]</b>';
+      banner.style.borderColor = 'var(--red)'; banner.style.background = 'rgba(255,0,60,.06)';
+    }
+  }
+  probe(); setInterval(probe, 5000);
+}
+
 const dl = {
   box: document.getElementById('dl'),
   bar: document.getElementById('dl-bar'),
@@ -489,7 +553,7 @@ function fmtMB(b){ return (b/1048576).toFixed(1) + ' MB'; }
 
 async function pollProgress(){
   try{
-    const r = await fetch('/api/progress'); const j = await r.json();
+    const r = await fetch(apiUrl('/api/progress')); const j = await r.json();
     const mb = fmtMB(j.bytes); const totalMb = fmtMB(j.total_estimated);
     dl.bar.style.width = j.percent + '%';
     dl.stats.textContent = `${mb} / ~${totalMb}  (${j.percent}%)`;
@@ -519,7 +583,7 @@ function stopPolling(){ if(dl.poll){ clearInterval(dl.poll); dl.poll=null; } }
 
 els.warm.addEventListener('click', async ()=>{
   els.warm.textContent = '[ WARMING... ]';
-  try{ await fetch('/api/warm', {method:'POST'}); }catch(e){}
+  try{ await fetch(apiUrl('/api/warm'), {method:'POST'}); }catch(e){}
   // Always show progress box so user has feedback (download or memory load)
   startPolling();
   setTimeout(()=>{ els.warm.textContent = '[ WARM UP ]'; refreshStatus(); }, 800);
@@ -530,7 +594,7 @@ const _origRefresh = refreshStatus;
 refreshStatus = async function(){
   await _origRefresh();
   try{
-    const r = await fetch('/api/status'); const j = await r.json();
+    const r = await fetch(apiUrl('/api/status')); const j = await r.json();
     if(j.loaded){
       els.warm.textContent = '[ READY ]';
       els.warm.style.borderColor = 'var(--green)';
@@ -653,7 +717,7 @@ els.go.addEventListener('click', async ()=>{
   let segCount = 0;
 
   try{
-    const r = await fetch('/api/transcribe/stream', { method:'POST', body: fd });
+    const r = await fetch(apiUrl('/api/transcribe/stream'), { method:'POST', body: fd });
     if(!r.ok){
       const t = await r.text();
       throw new Error(t || `HTTP ${r.status}`);

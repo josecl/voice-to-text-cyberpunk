@@ -78,8 +78,9 @@ ffmpeg -version     # → ffmpeg version ...
 ### 2.2 Setup del proyecto
 
 ```powershell
-# Entra a la carpeta donde extrajiste / clonaste el proyecto
-cd C:\ruta\a\voice-to-text
+# Clona el repo (o descomprime el zip si te lo pasaron por otra vía)
+git clone https://github.com/josecl/voice-to-text-cyberpunk.git
+cd voice-to-text-cyberpunk
 
 # Opción rápida: ejecutar el script
 powershell -ExecutionPolicy Bypass -File install.ps1

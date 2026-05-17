@@ -2,6 +2,8 @@
 
 Transcripción local de audio/vídeo (castellano + català) con interfaz HTML estética *Cyberpunk 2077*. Funciona en **macOS, Windows y Linux** — mismo código.
 
+🌐 **Demo web**: [josecl.github.io/voice-to-text-cyberpunk](https://josecl.github.io/voice-to-text-cyberpunk/) — UI alojada en GitHub Pages que se conecta a **tu** server local (`http://localhost:8000`). Privacidad total: el audio nunca sale de tu equipo.
+
 ## Stack
 
 - **[faster-whisper](https://github.com/SYSTRAN/faster-whisper)** (CTranslate2) — motor de Whisper cross-platform
@@ -9,8 +11,6 @@ Transcripción local de audio/vídeo (castellano + català) con interfaz HTML es
 - **FastAPI** + **uvicorn** — servidor local
 - **ffmpeg** — extracción/normalización de audio
 - **HTML/CSS/JS vainilla** — sin frameworks
-
-> ⚠️ **LM Studio NO se usa**. Probamos esa ruta pero LM Studio no expone Whisper como modelo servible (sólo como plugin de dictado en la UI de chat). Además su formato MLX es exclusivo de Apple Silicon — no portable a Windows.
 
 ## Requisitos comunes
 
