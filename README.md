@@ -152,7 +152,7 @@ Para apuntar a otro host (p. ej. otro PC de la red): botón `[ BACKEND ]` en HUD
 | `ALLOWED_AUTO_LANGS` | `es,ca` | Idiomas a los que se restringe AUTO. Cualquier otra detección cae al fallback |
 | `DEFAULT_FALLBACK_LANG` | `es` | Idioma de rescate cuando AUTO detecta algo no permitido |
 | `ALLOWED_ORIGINS` | `http://localhost:8000,http://127.0.0.1:8000,https://josecl.github.io` | Orígenes CORS permitidos |
-| `BIND_HOST` | `127.0.0.1` | Interfaz de escucha. `0.0.0.0` para exponer en LAN / Tailscale |
+| `BIND_HOST` | `127.0.0.1` | Interfaz de escucha. `0.0.0.0` para exponer en LAN |
 | `PORT` | `8000` | Puerto del server |
 | `HF_HOME` | `~/.cache/huggingface` | Dónde se cachea el modelo |
 
@@ -243,7 +243,7 @@ Unit en `~/.config/systemd/user/voicetotext.service` con `ExecStart=/ruta/.venv/
 
 ## Acceso desde fuera de tu equipo
 
-El server **no tiene autenticación nativa**. No expongas el puerto 8000 directamente a internet. Tres caminos seguros según el caso:
+El server **no tiene autenticación nativa**. No expongas el puerto 8000 directamente a internet. Dos caminos seguros según el caso:
 
 ### A) LAN (mismo Wi-Fi)
 
@@ -257,53 +257,7 @@ Otros equipos en tu red local pueden ir a `http://<IP-de-tu-mac>:8000`. Útil pa
 
 ---
 
-### B) Tailscale (uso personal · recomendado para tus dispositivos)
-
-VPN cifrada P2P entre tus dispositivos. No expone nada a internet público. Setup ≈ 5 min.
-
-#### 1. Instalar Tailscale en cada dispositivo
-
-| SO | Instalación |
-|---|---|
-| macOS | `brew install --cask tailscale` (o desde App Store) |
-| Windows | `winget install Tailscale.Tailscale -e` |
-| Linux | `curl -fsSL https://tailscale.com/install.sh \| sh` |
-| iOS / Android | App store oficial "Tailscale" |
-
-#### 2. Iniciar sesión (una vez por dispositivo)
-
-```bash
-# Mac/Linux
-sudo tailscale up
-
-# Windows: click en el icono de la bandeja → Log in
-```
-
-Te lleva a un login con Google/GitHub/Microsoft. Plan gratis cubre 100 dispositivos.
-
-#### 3. En el equipo que sirve el server
-
-```bash
-BIND_HOST=0.0.0.0 python server.py
-```
-
-#### 4. Conectar desde otro dispositivo
-
-Mira el nombre de la máquina:
-```bash
-tailscale status
-# Ejemplo: mbp-jose  100.x.y.z
-```
-
-Desde tu móvil/iPad/otro PC con Tailscale activo:
-- **http://mbp-jose:8000** (MagicDNS, si está activado en la admin console)
-- O **http://100.x.y.z:8000** (IP de Tailscale, siempre funciona)
-
-> Para compartir con un amigo: en la admin console de Tailscale, "Users" → "Invite external users" → comparte solo este nodo. Él instala Tailscale, acepta, y accede igual.
-
----
-
-### C) Cloudflare Tunnel + Access (compartir con amigos vía URL pública)
+### B) Cloudflare Tunnel + Access (compartir con amigos vía URL pública)
 
 URL pública HTTPS con login obligatorio (Google/GitHub/email OTP) **antes** de llegar a tu server. Tu IP queda oculta. No abre puertos en tu router (túnel saliente). Gratis hasta 50 usuarios.
 
