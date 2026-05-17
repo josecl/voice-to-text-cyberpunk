@@ -153,6 +153,23 @@
     display:flex;
   }
   .chip[hidden]{display:none !important}
+  .chip .info{flex:1;min-width:0}
+  .chip .info > div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .play-btn{
+    appearance:none;cursor:pointer;flex-shrink:0;
+    width:38px;height:38px;border-radius:50%;
+    border:1px solid var(--green);background:rgba(0,255,159,.08);color:var(--green);
+    font-size:14px;line-height:1;display:inline-flex;align-items:center;justify-content:center;
+    transition:all .15s ease;
+    box-shadow:0 0 8px rgba(0,255,159,.25);
+  }
+  .play-btn:hover{background:rgba(0,255,159,.18);box-shadow:0 0 14px rgba(0,255,159,.5)}
+  .play-btn[disabled]{opacity:.35;cursor:not-allowed;box-shadow:none}
+  .play-btn.playing{color:var(--yellow);border-color:var(--yellow);background:rgba(252,238,10,.08);box-shadow:0 0 14px rgba(252,238,10,.45)}
+  .chip-time{
+    font-family:'Share Tech Mono',monospace;font-size:11px;color:var(--cyan);
+    letter-spacing:.08em;min-width:88px;text-align:right;
+  }
   .chip .meta{color:#8d96a0;font-size:11px;letter-spacing:.15em}
   .chip .x{cursor:pointer;color:var(--red);font-family:'Orbitron',sans-serif}
 
@@ -376,9 +393,9 @@
       <span id="status-ffmpeg">FFMPEG: <b>--</b></span>
     </div>
     <div class="right">
-      <button class="mini" id="backend-btn" style="border-color:var(--cyan);color:var(--cyan)" title="Configurar URL del backend">[ BACKEND ]</button>
-      <button class="mini" id="history-btn" style="border-color:var(--cyan);color:var(--cyan)">[ HISTORY ]</button>
-      <button class="mini" id="warm" style="border-color:var(--yellow);color:var(--yellow)">[ WARM UP ]</button>
+      <button class="mini" id="backend-btn" style="border-color:var(--cyan);color:var(--cyan)" title="Configurar URL del backend">[BACKEND]</button>
+      <button class="mini" id="history-btn" style="border-color:var(--cyan);color:var(--cyan)">[HISTORY]</button>
+      <button class="mini" id="warm" style="border-color:var(--yellow);color:var(--yellow)">[WARM_UP]</button>
       <span>v.2077.05.17</span>
     </div>
   </div>
@@ -456,12 +473,15 @@
     </div>
 
     <div class="chip" id="chip" hidden>
-      <div>
+      <button class="play-btn" id="play-btn" type="button" title="Reproducir" disabled>▶</button>
+      <div class="info">
         <div id="chip-name">archivo.wav</div>
         <div class="meta" id="chip-meta">-- KB</div>
       </div>
-      <span class="x" id="chip-x">[ X ]</span>
+      <span class="chip-time" id="chip-time">--:-- / --:--</span>
+      <span class="x" id="chip-x">[X]</span>
     </div>
+    <audio id="audio-player" preload="metadata" style="display:none"></audio>
 
     <div class="actions">
       <button class="btn" id="go" disabled>▶ TRANSMIT</button>
@@ -484,9 +504,9 @@
     </div>
     <pre id="out" class="out-empty">// Esperando transmisión. Carga un archivo y pulsa TRANSMIT.</pre>
     <div class="out-actions" id="out-actions" style="display:none">
-      <button class="mini" id="copy">[ COPY ]</button>
-      <button class="mini" id="download-txt">[ .TXT ]</button>
-      <button class="mini" id="download-srt">[ .SRT ]</button>
+      <button class="mini" id="copy">[COPY]</button>
+      <button class="mini" id="download-txt">[.TXT]</button>
+      <button class="mini" id="download-srt">[.SRT]</button>
     </div>
   </section>
 
@@ -500,12 +520,12 @@
 <aside class="drawer" id="drawer" aria-hidden="true">
   <div class="drawer-head">
     <h2>// LOCAL_ARCHIVE</h2>
-    <span class="x" id="drawer-close">[ CLOSE ]</span>
+    <span class="x" id="drawer-close">[CLOSE]</span>
   </div>
   <div class="drawer-tools">
     <input id="hist-search" type="text" placeholder="// SEARCH IN ARCHIVE..." />
-    <button class="hist-btn" id="hist-export">[ EXPORT JSON ]</button>
-    <button class="hist-btn danger" id="hist-clear">[ CLEAR ALL ]</button>
+    <button class="hist-btn" id="hist-export">[EXPORT_JSON]</button>
+    <button class="hist-btn danger" id="hist-clear">[CLEAR_ALL]</button>
   </div>
   <div class="drawer-list" id="hist-list"></div>
   <div class="drawer-foot">
@@ -536,6 +556,7 @@ const $ = (sel)=>document.querySelector(sel);
 const els = {
   file: $('#file'), drop: $('#drop'), chip: $('#chip'), chipName: $('#chip-name'),
   chipMeta: $('#chip-meta'), chipX: $('#chip-x'),
+  playBtn: $('#play-btn'), audio: $('#audio-player'), chipTime: $('#chip-time'),
   go: $('#go'), reset: $('#reset'),
   progress: $('#progress'), bar: $('#bar'), barLabel: $('#bar-label'),
   err: $('#err'), out: $('#out'), outStats: $('#out-stats'), outActions: $('#out-actions'),
@@ -563,7 +584,19 @@ async function refreshStatus(){
     els.statusFfmpeg.innerHTML = `FFMPEG: <b style="color:${j.ffmpeg?'var(--green)':'var(--red)'}">${j.ffmpeg?'OK':'MISSING'}</b>`;
   }catch(e){/* swallow */}
 }
-refreshStatus(); setInterval(refreshStatus, 3000);
+// Poll status every 3s only while NOT loaded. Once READY, stop polling — the
+// state won't change unless the user warms up another model. Status is still
+// refreshed manually after WARM UP or BACKEND switch.
+let _statusIv = null;
+function scheduleStatusPoll(loaded){
+  if(loaded){
+    if(_statusIv){ clearInterval(_statusIv); _statusIv = null; }
+    return;
+  }
+  if(!_statusIv) _statusIv = setInterval(refreshStatus, 3000);
+}
+refreshStatus();
+scheduleStatusPoll(false);
 
 // Backend config button
 document.getElementById('backend-btn').addEventListener('click', ()=>{
@@ -591,10 +624,10 @@ if(!isLocalHost()){
     try{
       const r = await fetch(apiUrl('/api/status'), { cache:'no-store' });
       if(!r.ok) throw new Error();
-      bannerStatus.innerHTML = '<b style="color:var(--green)">[ ONLINE ]</b>';
+      bannerStatus.innerHTML = '<b style="color:var(--green)">[ONLINE]</b>';
       banner.style.borderColor = 'var(--green)'; banner.style.background = 'rgba(0,255,159,.05)';
     }catch(e){
-      bannerStatus.innerHTML = '<b style="color:var(--red)">[ UNREACHABLE ]</b>';
+      bannerStatus.innerHTML = '<b style="color:var(--red)">[UNREACHABLE]</b>';
       banner.style.borderColor = 'var(--red)'; banner.style.background = 'rgba(255,0,60,.06)';
     }
   }
@@ -641,11 +674,11 @@ function startPolling(){
 function stopPolling(){ if(dl.poll){ clearInterval(dl.poll); dl.poll=null; } }
 
 els.warm.addEventListener('click', async ()=>{
-  els.warm.textContent = '[ WARMING... ]';
+  els.warm.textContent = '[WARMING...]';
   try{ await fetch(apiUrl('/api/warm'), {method:'POST'}); }catch(e){}
   // Always show progress box so user has feedback (download or memory load)
   startPolling();
-  setTimeout(()=>{ els.warm.textContent = '[ WARM UP ]'; refreshStatus(); }, 800);
+  setTimeout(()=>{ els.warm.textContent = '[WARM_UP]'; refreshStatus(); }, 800);
 });
 
 // Auto-hide WARM button when model is ready, replace label
@@ -654,8 +687,9 @@ refreshStatus = async function(){
   await _origRefresh();
   try{
     const r = await fetch(apiUrl('/api/status')); const j = await r.json();
+    scheduleStatusPoll(!!j.loaded);
     if(j.loaded){
-      els.warm.textContent = '[ READY ]';
+      els.warm.textContent = '[READY]';
       els.warm.style.borderColor = 'var(--green)';
       els.warm.style.color = 'var(--green)';
       els.warm.disabled = true; els.warm.style.cursor = 'default';
@@ -697,6 +731,21 @@ function setFile(f){
   els.chipMeta.textContent = `${fmtSize(f.size)} · ${f.type||'unknown'}`;
   els.go.disabled = false;
   clearErr();
+  // Wire audio player (optimistic: enable now, disable on error)
+  if(audioObjectUrl){ URL.revokeObjectURL(audioObjectUrl); audioObjectUrl = null; }
+  els.playBtn.classList.remove('playing');
+  els.playBtn.textContent = '▶';
+  els.chipTime.textContent = '--:-- / --:--';
+  try{
+    audioObjectUrl = URL.createObjectURL(f);
+    els.audio.src = audioObjectUrl;
+    els.audio.load();
+    els.playBtn.disabled = false;
+    els.playBtn.title = 'Reproducir';
+  }catch(e){
+    els.playBtn.disabled = true;
+    els.playBtn.title = 'No se puede crear preview';
+  }
 }
 
 els.chipX.addEventListener('click', e => { e.stopPropagation(); resetFile(); });
@@ -704,6 +753,11 @@ els.reset.addEventListener('click', resetAll);
 
 function resetFile(){
   state.file=null; els.file.value=''; els.chip.hidden=true; els.go.disabled=true;
+  if(!els.audio.paused){ els.audio.pause(); }
+  if(audioObjectUrl){ URL.revokeObjectURL(audioObjectUrl); audioObjectUrl = null; }
+  els.audio.removeAttribute('src'); els.audio.load();
+  els.playBtn.classList.remove('playing'); els.playBtn.textContent = '▶'; els.playBtn.disabled = true;
+  els.chipTime.textContent = '--:-- / --:--';
 }
 function resetAll(){
   resetFile(); clearErr();
@@ -714,10 +768,43 @@ function resetAll(){
   state.lastResult = null;
 }
 function showErr(msg){
-  els.err.textContent = '[ ERROR ] '+msg;
+  els.err.textContent = '[ERROR] '+msg;
   els.err.classList.add('on');
 }
 function clearErr(){ els.err.classList.remove('on'); }
+
+/* =================== AUDIO PREVIEW =================== */
+let audioObjectUrl = null;
+function fmtClock(s){
+  if(!isFinite(s) || s < 0) s = 0;
+  const m = Math.floor(s/60), sec = Math.floor(s%60);
+  return String(m).padStart(2,'0') + ':' + String(sec).padStart(2,'0');
+}
+els.playBtn.addEventListener('click', ()=>{
+  if(!els.audio.src) return;
+  if(els.audio.paused){
+    els.audio.play().catch(e => showErr('Reproducción falló: ' + e.message));
+  } else {
+    els.audio.pause();
+  }
+});
+function _renderTime(){
+  const d = els.audio.duration;
+  const dur = isFinite(d) ? fmtClock(d) : '--:--';
+  els.chipTime.textContent = `${fmtClock(els.audio.currentTime)} / ${dur}`;
+}
+els.audio.addEventListener('loadedmetadata', _renderTime);
+els.audio.addEventListener('durationchange', _renderTime);
+els.audio.addEventListener('canplay', ()=>{ els.playBtn.disabled = false; _renderTime(); });
+els.audio.addEventListener('timeupdate', _renderTime);
+els.audio.addEventListener('play',  ()=>{ els.playBtn.textContent = '■'; els.playBtn.classList.add('playing'); els.playBtn.title = 'Pausar'; });
+els.audio.addEventListener('pause', ()=>{ els.playBtn.textContent = '▶'; els.playBtn.classList.remove('playing'); els.playBtn.title = 'Reproducir'; });
+els.audio.addEventListener('ended', ()=>{ els.playBtn.textContent = '▶'; els.playBtn.classList.remove('playing'); });
+els.audio.addEventListener('error', ()=>{
+  els.playBtn.disabled = true;
+  els.playBtn.title = 'Formato no reproducible por este navegador';
+  els.chipTime.textContent = 'preview n/a';
+});
 
 /* =================== MIC RECORDER =================== */
 const Recorder = (()=>{
@@ -977,9 +1064,21 @@ els.go.addEventListener('click', async ()=>{
         state.lastResult = j;
         els.bar.style.width = '100%';
         els.barLabel.textContent = `DONE · ${segCount} segments · ${evt.data.elapsed_s}s`;
-        els.out.textContent = evt.data.text;
-        els.outStats.textContent = `⏱ ${evt.data.elapsed_s}s · LANG: ${String(evt.data.language).toUpperCase()} · DUR: ${fmtTime(evt.data.duration)} · ${evt.data.text.length} chars`;
-        els.outActions.style.display = 'flex';
+        const empty = !evt.data.text || !evt.data.text.trim();
+        if(empty){
+          els.out.classList.add('out-empty');
+          els.out.textContent = `// (sin contenido detectado en ${fmtTime(evt.data.duration)})\n// Posibles causas: audio muy silencioso, micrófono mudeado, VAD filtró todo, o duración < 1s.`;
+          if(evt.data.language_reason) {
+            els.outStats.textContent = `⚠ EMPTY · DUR: ${fmtTime(evt.data.duration)} · ${evt.data.language_reason}`;
+          } else {
+            els.outStats.textContent = `⚠ EMPTY · DUR: ${fmtTime(evt.data.duration)}`;
+          }
+        } else {
+          els.out.textContent = evt.data.text;
+          els.outStats.textContent = `⏱ ${evt.data.elapsed_s}s · LANG: ${String(evt.data.language).toUpperCase()} · DUR: ${fmtTime(evt.data.duration)} · ${evt.data.text.length} chars`;
+        }
+        els.outActions.style.display = empty ? 'none' : 'flex';
+        if(empty) break;  // don't save empty entries to history
         History.save({
           title: state.file?.name || 'sin título',
           filename: state.file?.name || '',
@@ -1115,9 +1214,9 @@ const History = (()=>{
         </div>
         <div class="hist-preview">${escapeHtml(e.text.slice(0, 220))}${e.text.length>220?'…':''}</div>
         <div class="hist-actions">
-          <button class="hist-btn" data-act="load" data-id="${e.id}">[ LOAD ]</button>
-          <button class="hist-btn" data-act="copy" data-id="${e.id}">[ COPY ]</button>
-          <button class="hist-btn danger" data-act="del" data-id="${e.id}">[ DELETE ]</button>
+          <button class="hist-btn" data-act="load" data-id="${e.id}">[LOAD]</button>
+          <button class="hist-btn" data-act="copy" data-id="${e.id}">[COPY]</button>
+          <button class="hist-btn danger" data-act="del" data-id="${e.id}">[DELETE]</button>
         </div>
       </div>
     `).join('');
@@ -1160,7 +1259,7 @@ document.getElementById('hist-list').addEventListener('click', e => {
   else if(act==='copy'){
     const e = History.read().find(x=>x.id===id);
     if(e) navigator.clipboard.writeText(e.text).then(()=>{
-      btn.textContent='[ COPIED ]'; setTimeout(()=>btn.textContent='[ COPY ]', 1200);
+      btn.textContent='[COPIED]'; setTimeout(()=>btn.textContent='[COPY]', 1200);
     });
   }
 });
@@ -1182,8 +1281,8 @@ History.render();
 
 els.copy.addEventListener('click', ()=>{
   navigator.clipboard.writeText(els.out.textContent).then(()=>{
-    els.copy.textContent = '[ COPIED ]';
-    setTimeout(()=> els.copy.textContent = '[ COPY ]', 1400);
+    els.copy.textContent = '[COPIED]';
+    setTimeout(()=> els.copy.textContent = '[COPY]', 1400);
   });
 });
 els.dlTxt.addEventListener('click', ()=> download('transcription.txt', els.out.textContent));

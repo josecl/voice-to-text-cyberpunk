@@ -228,10 +228,20 @@ def _resolve_language(model, audio_path: str, requested: str) -> tuple[str, str]
     """
     if requested and requested != "auto":
         return requested, "user-selected"
+    # Sanity check on audio size — empty/tiny WAV → skip detection.
+    try:
+        size = Path(audio_path).stat().st_size
+    except OSError:
+        size = 0
+    if size < 4096:  # < 4 KB of WAV ≈ < ~0.1s of 16 kHz PCM
+        return DEFAULT_FALLBACK_LANG, f"audio too small ({size} B) → fallback"
     try:
         det, prob, _ = model.detect_language(audio_path)
     except Exception as exc:
-        return DEFAULT_FALLBACK_LANG, f"detect-failed ({exc.__class__.__name__}) → fallback"
+        import traceback
+        traceback.print_exc()
+        msg = f"{exc.__class__.__name__}: {exc}"[:120]
+        return DEFAULT_FALLBACK_LANG, f"detect-failed ({msg}) → fallback"
     if det in ALLOWED_AUTO_LANGS:
         return det, f"auto-detected '{det}' ({prob*100:.0f}%)"
     return DEFAULT_FALLBACK_LANG, (
