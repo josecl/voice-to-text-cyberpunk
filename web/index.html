@@ -231,6 +231,48 @@
   }
   footer span{color:var(--cyan)}
 
+  /* Microphone recorder */
+  .rec-row{display:flex;align-items:center;gap:14px;margin-top:14px;flex-wrap:wrap}
+  .rec-row .label{color:var(--red)}
+  .rec-btn{
+    appearance:none;cursor:pointer;
+    border:1px solid var(--red);background:transparent;color:var(--red);
+    font-family:'Orbitron',sans-serif;font-weight:800;letter-spacing:.22em;font-size:13px;
+    padding:10px 18px;clip-path:polygon(8px 0,100% 0,calc(100% - 8px) 100%,0 100%);
+    transition:all .15s ease;
+  }
+  .rec-btn:hover{background:rgba(255,0,60,.1);box-shadow:0 0 14px rgba(255,0,60,.4)}
+  .rec-btn[disabled]{opacity:.4;cursor:not-allowed}
+  .rec-hint{font-family:'Share Tech Mono',monospace;font-size:11px;color:#6e7884;letter-spacing:.18em}
+
+  .rec-panel{
+    margin-top:14px;border:1px solid var(--red);background:rgba(255,0,60,.04);
+    padding:16px 18px;
+    clip-path:polygon(0 10px,10px 0,calc(100% - 10px) 0,100% 10px,100% calc(100% - 10px),calc(100% - 10px) 100%,10px 100%,0 calc(100% - 10px));
+  }
+  .rec-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px;flex-wrap:wrap}
+  .rec-dot{
+    display:inline-block;width:14px;height:14px;border-radius:50%;
+    background:var(--red);box-shadow:0 0 14px var(--red);
+    animation:recpulse 1s infinite;vertical-align:middle;margin-right:10px;
+  }
+  @keyframes recpulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.7)}}
+  .rec-status{
+    font-family:'Orbitron',sans-serif;font-weight:800;letter-spacing:.22em;font-size:15px;
+    color:var(--red);text-shadow:0 0 8px rgba(255,0,60,.5);
+  }
+  .rec-timer{
+    font-family:'Share Tech Mono',monospace;font-size:22px;color:var(--yellow);
+    letter-spacing:.12em;text-shadow:0 0 10px rgba(252,238,10,.5);
+  }
+  #rec-canvas{
+    display:block;width:100%;height:80px;background:rgba(0,0,0,.35);
+    border:1px solid rgba(255,0,60,.25);margin:6px 0 12px;
+  }
+  .rec-actions{display:flex;gap:10px;flex-wrap:wrap}
+  .rec-actions .btn.stop{background:var(--red);color:#0a0a0a;box-shadow:0 0 18px rgba(255,0,60,.45)}
+  .rec-actions .btn.discard{background:transparent;color:#cfd3da;border:1px solid #555}
+
   /* History drawer */
   .drawer-overlay{
     position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(2px);
@@ -395,6 +437,23 @@
       <div class="small">audio: mp3 · wav · m4a · flac · opus &nbsp;//&nbsp; video: mp4 · mov · mkv · webm</div>
       <input type="file" id="file" accept="audio/*,video/*" />
     </label>
+
+    <div class="rec-row">
+      <button class="rec-btn" id="rec-start" type="button">● REC MIC</button>
+      <span class="rec-hint">// o graba directamente desde el micrófono del dispositivo</span>
+    </div>
+
+    <div class="rec-panel" id="rec-panel" hidden>
+      <div class="rec-head">
+        <div><span class="rec-dot"></span><span class="rec-status">RECORDING</span></div>
+        <div class="rec-timer" id="rec-timer">00:00</div>
+      </div>
+      <canvas id="rec-canvas" width="800" height="80"></canvas>
+      <div class="rec-actions">
+        <button class="btn stop" id="rec-stop" type="button">■ STOP &amp; TRANSMIT</button>
+        <button class="btn discard" id="rec-discard" type="button">✕ DISCARD</button>
+      </div>
+    </div>
 
     <div class="chip" id="chip" hidden>
       <div>
@@ -659,6 +718,179 @@ function showErr(msg){
   els.err.classList.add('on');
 }
 function clearErr(){ els.err.classList.remove('on'); }
+
+/* =================== MIC RECORDER =================== */
+const Recorder = (()=>{
+  const recBtn = document.getElementById('rec-start');
+  const recPanel = document.getElementById('rec-panel');
+  const recTimer = document.getElementById('rec-timer');
+  const recStop = document.getElementById('rec-stop');
+  const recDiscard = document.getElementById('rec-discard');
+  const canvas = document.getElementById('rec-canvas');
+  const ctx = canvas.getContext('2d');
+
+  let mediaStream = null, audioCtx = null, analyser = null;
+  let recorder = null, chunks = [], startedAt = 0, timerIv = null, rafId = null;
+  let extension = '.webm';
+
+  function pickMime(){
+    if(!('MediaRecorder' in window)) return null;
+    const opts = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/mp4',           // iOS Safari
+      'audio/mp4;codecs=mp4a.40.2',
+      'audio/ogg;codecs=opus',
+    ];
+    for(const m of opts){
+      if(MediaRecorder.isTypeSupported(m)) return m;
+    }
+    return ''; // browser default
+  }
+  function extFromMime(mime){
+    if(!mime) return '.webm';
+    if(mime.includes('webm')) return '.webm';
+    if(mime.includes('mp4')) return '.m4a';
+    if(mime.includes('ogg')) return '.ogg';
+    return '.webm';
+  }
+  function fmt(sec){
+    const m = Math.floor(sec/60), s = Math.floor(sec%60);
+    return String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+  }
+
+  function drawViz(){
+    if(!analyser){ return; }
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = canvas.clientWidth * dpr;
+    canvas.height = canvas.clientHeight * dpr;
+    const w = canvas.width, h = canvas.height;
+    const bins = analyser.frequencyBinCount;
+    const data = new Uint8Array(bins);
+
+    function loop(){
+      analyser.getByteFrequencyData(data);
+      ctx.clearRect(0,0,w,h);
+      // grid
+      ctx.strokeStyle = 'rgba(255,0,60,.12)';
+      ctx.lineWidth = 1;
+      for(let y=0; y<h; y+=h/4){
+        ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke();
+      }
+      const barW = w / bins * 1.6;
+      let x = 0;
+      for(let i=0; i<bins; i++){
+        const v = data[i] / 255;
+        const bh = v * h;
+        // gradient color by intensity
+        const r = 255, g = Math.floor(60 + v*150), b = Math.floor(60 + (1-v)*50);
+        ctx.fillStyle = `rgba(${r},${g - 60},${b - 60},${0.85})`;
+        ctx.shadowColor = 'rgba(255,0,60,.6)'; ctx.shadowBlur = 6;
+        ctx.fillRect(x, h - bh, barW - 1, bh);
+        ctx.shadowBlur = 0;
+        x += barW;
+        if(x > w) break;
+      }
+      rafId = requestAnimationFrame(loop);
+    }
+    loop();
+  }
+
+  async function start(){
+    clearErr();
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      showErr('Tu navegador no soporta grabación de audio.');
+      return;
+    }
+    if(!window.isSecureContext && !['localhost','127.0.0.1'].includes(location.hostname)){
+      showErr('Grabación requiere HTTPS (o localhost). Usa la versión local o un túnel HTTPS.');
+      return;
+    }
+    try{
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+    }catch(e){
+      showErr('No se pudo acceder al micrófono: ' + (e.message||e.name));
+      return;
+    }
+    const mime = pickMime();
+    extension = extFromMime(mime);
+    try{
+      recorder = mime ? new MediaRecorder(mediaStream, { mimeType: mime })
+                      : new MediaRecorder(mediaStream);
+    }catch(e){
+      showErr('MediaRecorder no disponible: ' + e.message);
+      stop(true); return;
+    }
+    chunks = [];
+    recorder.ondataavailable = e => { if(e.data && e.data.size) chunks.push(e.data); };
+    recorder.onstop = onRecorderStop;
+    recorder.start(250);
+
+    // Visualizer
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioCtx.createMediaStreamSource(mediaStream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 128;
+    analyser.smoothingTimeConstant = 0.7;
+    source.connect(analyser);
+
+    // UI
+    recPanel.hidden = false;
+    recBtn.disabled = true;
+    recBtn.textContent = '● RECORDING...';
+    startedAt = performance.now();
+    recTimer.textContent = '00:00';
+    timerIv = setInterval(()=>{
+      recTimer.textContent = fmt((performance.now() - startedAt)/1000);
+    }, 250);
+    drawViz();
+  }
+
+  function onRecorderStop(){
+    const finalMime = recorder.mimeType || pickMime() || 'audio/webm';
+    const blob = new Blob(chunks, { type: finalMime });
+    const ts = new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
+    const name = `recording-${ts}${extension}`;
+    const file = new File([blob], name, { type: finalMime, lastModified: Date.now() });
+    setFile(file);
+    teardown();
+    // Auto-transmit
+    setTimeout(()=> els.go.click(), 50);
+  }
+
+  function teardown(){
+    if(timerIv){ clearInterval(timerIv); timerIv = null; }
+    if(rafId){ cancelAnimationFrame(rafId); rafId = null; }
+    if(audioCtx){ try{ audioCtx.close(); }catch(e){} audioCtx = null; }
+    analyser = null;
+    if(mediaStream){ mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+    recPanel.hidden = true;
+    recBtn.disabled = false;
+    recBtn.textContent = '● REC MIC';
+  }
+
+  function stop(discardOnly=false){
+    if(recorder && recorder.state !== 'inactive'){
+      if(discardOnly){
+        // Replace onstop with a no-op so we don't transmit
+        recorder.onstop = teardown;
+      }
+      recorder.stop();
+    } else {
+      teardown();
+    }
+  }
+
+  recBtn.addEventListener('click', start);
+  recStop.addEventListener('click', ()=> stop(false));
+  recDiscard.addEventListener('click', ()=> {
+    if(confirm('// Descartar grabación?')) stop(true);
+  });
+
+  return { start, stop };
+})();
 
 function fmtTime(s){
   if(!isFinite(s) || s<0) s = 0;
