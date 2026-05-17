@@ -236,7 +236,11 @@ def _resolve_language(model, audio_path: str, requested: str) -> tuple[str, str]
     if size < 4096:  # < 4 KB of WAV ≈ < ~0.1s of 16 kHz PCM
         return DEFAULT_FALLBACK_LANG, f"audio too small ({size} B) → fallback"
     try:
-        det, prob, _ = model.detect_language(audio_path)
+        # faster-whisper's detect_language() needs an already-decoded numpy
+        # array, not a path (transcribe() decodes internally, this one doesn't).
+        from faster_whisper.audio import decode_audio
+        waveform = decode_audio(audio_path, sampling_rate=16000)
+        det, prob, _ = model.detect_language(waveform)
     except Exception as exc:
         import traceback
         traceback.print_exc()
