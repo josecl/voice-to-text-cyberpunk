@@ -152,6 +152,8 @@ Para apuntar a otro host (p. ej. otro PC de la red): botón `[ BACKEND ]` en HUD
 | `ALLOWED_AUTO_LANGS` | `es,ca` | Idiomas a los que se restringe AUTO. Cualquier otra detección cae al fallback |
 | `DEFAULT_FALLBACK_LANG` | `es` | Idioma de rescate cuando AUTO detecta algo no permitido |
 | `ALLOWED_ORIGINS` | `http://localhost:8000,http://127.0.0.1:8000,https://josecl.github.io` | Orígenes CORS permitidos |
+| `BIND_HOST` | `127.0.0.1` | Interfaz de escucha. `0.0.0.0` para exponer en LAN / Tailscale |
+| `PORT` | `8000` | Puerto del server |
 | `HF_HOME` | `~/.cache/huggingface` | Dónde se cachea el modelo |
 
 Ejemplo Windows (sesión actual):
@@ -239,15 +241,171 @@ Unit en `~/.config/systemd/user/voicetotext.service` con `ExecStart=/ruta/.venv/
 
 ---
 
-## Acceso desde otros equipos de la red local
+## Acceso desde fuera de tu equipo
 
-Por defecto el server escucha solo en `127.0.0.1`. Para exponerlo en LAN, edita la última línea de `server.py`:
+El server **no tiene autenticación nativa**. No expongas el puerto 8000 directamente a internet. Tres caminos seguros según el caso:
 
-```python
-uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False)
+### A) LAN (mismo Wi-Fi)
+
+```bash
+BIND_HOST=0.0.0.0 python server.py
 ```
 
-⚠️ No expongas a internet sin autenticación — no hay auth implementada.
+Otros equipos en tu red local pueden ir a `http://<IP-de-tu-mac>:8000`. Útil para tu móvil/iPad/PC en casa.
+
+> Recuerda añadir el origen a `ALLOWED_ORIGINS` si usas la demo de GitHub Pages desde otro equipo y apuntando a esta IP.
+
+---
+
+### B) Tailscale (uso personal · recomendado para tus dispositivos)
+
+VPN cifrada P2P entre tus dispositivos. No expone nada a internet público. Setup ≈ 5 min.
+
+#### 1. Instalar Tailscale en cada dispositivo
+
+| SO | Instalación |
+|---|---|
+| macOS | `brew install --cask tailscale` (o desde App Store) |
+| Windows | `winget install Tailscale.Tailscale -e` |
+| Linux | `curl -fsSL https://tailscale.com/install.sh \| sh` |
+| iOS / Android | App store oficial "Tailscale" |
+
+#### 2. Iniciar sesión (una vez por dispositivo)
+
+```bash
+# Mac/Linux
+sudo tailscale up
+
+# Windows: click en el icono de la bandeja → Log in
+```
+
+Te lleva a un login con Google/GitHub/Microsoft. Plan gratis cubre 100 dispositivos.
+
+#### 3. En el equipo que sirve el server
+
+```bash
+BIND_HOST=0.0.0.0 python server.py
+```
+
+#### 4. Conectar desde otro dispositivo
+
+Mira el nombre de la máquina:
+```bash
+tailscale status
+# Ejemplo: mbp-jose  100.x.y.z
+```
+
+Desde tu móvil/iPad/otro PC con Tailscale activo:
+- **http://mbp-jose:8000** (MagicDNS, si está activado en la admin console)
+- O **http://100.x.y.z:8000** (IP de Tailscale, siempre funciona)
+
+> Para compartir con un amigo: en la admin console de Tailscale, "Users" → "Invite external users" → comparte solo este nodo. Él instala Tailscale, acepta, y accede igual.
+
+---
+
+### C) Cloudflare Tunnel + Access (compartir con amigos vía URL pública)
+
+URL pública HTTPS con login obligatorio (Google/GitHub/email OTP) **antes** de llegar a tu server. Tu IP queda oculta. No abre puertos en tu router (túnel saliente). Gratis hasta 50 usuarios.
+
+#### Pre-requisitos
+- Cuenta gratis en [cloudflare.com](https://dash.cloudflare.com/sign-up)
+- Un dominio en Cloudflare DNS (puedes registrar uno por ~$10/año o transferir uno existente; los gratuitos `.tk/.cf/.ml` ya no son recomendables)
+
+#### 1. Instalar `cloudflared`
+
+| SO | Instalación |
+|---|---|
+| macOS | `brew install cloudflared` |
+| Windows | `winget install --id Cloudflare.cloudflared -e` |
+| Linux | [paquetes oficiales](https://pkg.cloudflare.com/) |
+
+#### 2. Autenticar
+
+```bash
+cloudflared tunnel login
+```
+
+Abre el navegador, eliges el dominio que quieres usar y autoriza.
+
+#### 3. Crear túnel
+
+```bash
+cloudflared tunnel create voice-to-text
+```
+
+Te devuelve un UUID. Guarda la ruta del archivo `.json` de credenciales que crea (típicamente `~/.cloudflared/<UUID>.json`).
+
+#### 4. Configurar
+
+Crea `~/.cloudflared/config.yml`:
+
+```yaml
+tunnel: <UUID-del-tunel>
+credentials-file: /Users/<usuario>/.cloudflared/<UUID>.json
+
+ingress:
+  - hostname: voice.tudominio.com
+    service: http://localhost:8000
+  - service: http_status:404
+```
+
+#### 5. Asociar el subdominio al túnel
+
+```bash
+cloudflared tunnel route dns voice-to-text voice.tudominio.com
+```
+
+#### 6. Arrancar el túnel
+
+```bash
+cloudflared tunnel run voice-to-text
+```
+
+Ya tienes el túnel activo, pero **sin auth** todavía — cualquiera con la URL entra. Vamos a ponerle login.
+
+#### 7. Proteger con Cloudflare Access (Zero Trust)
+
+En el [dashboard de Cloudflare](https://one.dash.cloudflare.com/) → **Zero Trust** → **Access** → **Applications** → **Add an application** → **Self-hosted**:
+
+- **Application name**: `voice-to-text`
+- **Subdomain**: `voice` · **Domain**: `tudominio.com`
+- Continúa → **Add a policy**:
+  - **Action**: `Allow`
+  - **Include**: `Emails` → añade los emails de tus amigos (uno por línea)
+- Identity provider: el que tengas activo (One-time PIN funciona sin configurar nada — manda código al email)
+
+A partir de ahora, abrir `https://voice.tudominio.com` muestra pantalla de login con email; solo los emails en la policy reciben el código y pasan.
+
+#### 8. Que el server acepte el origen
+
+Si tus amigos usan la demo de GitHub Pages apuntada a `https://voice.tudominio.com`, ya está en CORS porque la fetch va al dominio de CF (mismo origen para la UI). Si abren directamente `https://voice.tudominio.com`, todo es same-origin: tampoco hace falta tocar nada.
+
+> Si en algún momento aparecen errores CORS, añade el origen:
+> ```bash
+> ALLOWED_ORIGINS="http://localhost:8000,https://josecl.github.io,https://voice.tudominio.com" python server.py
+> ```
+
+#### 9. Dejar el túnel como servicio (opcional)
+
+```bash
+# macOS (launchd)
+sudo cloudflared service install
+
+# Windows (servicio Windows)
+cloudflared service install
+```
+
+---
+
+### Opción rápida sin dominio · `trycloudflare`
+
+Para demos puntuales sin dominio ni configuración:
+
+```bash
+cloudflared tunnel --url http://localhost:8000
+```
+
+Te genera una URL `https://<random>.trycloudflare.com` temporal. **NO incluye Access** (cualquiera con la URL entra), así que solo úsala con audios que no te importen y por poco tiempo.
 
 ---
 
